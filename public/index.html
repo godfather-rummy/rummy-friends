@@ -32,8 +32,23 @@
 
 <div id="screen-game" class="screen">
   <div class="topbar">
-    <div id="scoreboard"></div>
     <div id="turnIndicator"></div>
+    <div class="timer-wrap">
+      <svg viewBox="0 0 60 60" class="timer-ring">
+        <circle cx="30" cy="30" r="26" class="timer-track"/>
+        <circle cx="30" cy="30" r="26" class="timer-progress" id="timerProgress"/>
+      </svg>
+      <span id="timerText">60</span>
+    </div>
+    <button id="toggleScoresBtn" class="btn tiny">Points Table</button>
+  </div>
+
+  <div id="scoresPanel" class="scores-panel">
+    <h3>Live Points</h3>
+    <table id="scoresTable">
+      <thead><tr><th>Player</th><th>Points</th><th>Hand Value</th></tr></thead>
+      <tbody id="scoresTableBody"></tbody>
+    </table>
   </div>
 
   <div class="table">
@@ -54,7 +69,12 @@
   </div>
 
   <div class="hand-area">
+    <div class="hand-toolbar">
+      <span id="deadwoodLabel" class="deadwood-label">Hand value: —</span>
+      <button id="sortBtn" class="btn tiny">Sort Hand</button>
+    </div>
     <div id="handCards" class="hand-cards"></div>
+    <p class="hint">Drag a card onto another to group them (sequence/set). Double-click a card to discard it on your turn.</p>
     <div class="hand-actions">
       <button id="declareBtn" class="btn danger">Declare</button>
     </div>

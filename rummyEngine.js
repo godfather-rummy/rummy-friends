@@ -175,6 +175,86 @@ function scoreLoserHand(handGroups, wildJokerRank) {
   return Math.min(deadwood, 80); // cap at 80 per standard rules
 }
 
+// ---------- AUTO ARRANGE ----------
+// Greedy best-effort grouping: finds pure sequences first, then impure
+// sequences using available jokers, then sets from what's left, and puts
+// the rest as a sorted "deadwood" group. Good enough for a "Sort" button
+// and for a live points/deadwood readout — not a guaranteed optimum.
+
+const RANK_ORDER = RANKS.reduce((m, r, i) => ((m[r] = i), m), {});
+
+function sortHandForDisplay(hand) {
+  const suitOrder = { S: 0, H: 1, D: 2, C: 3 };
+  return [...hand].sort((a, b) => {
+    if (a.isPrintedJoker !== b.isPrintedJoker) return a.isPrintedJoker ? 1 : -1;
+    if (a.suit !== b.suit) return (suitOrder[a.suit] ?? 9) - (suitOrder[b.suit] ?? 9);
+    return RANK_ORDER[a.rank] - RANK_ORDER[b.rank];
+  });
+}
+
+function autoArrangeHand(hand, wildJokerRank) {
+  const jokers = hand.filter(c => isWildJoker(c, wildJokerRank));
+  let naturals = hand.filter(c => !isWildJoker(c, wildJokerRank));
+  const groups = [];
+  let jokerPool = [...jokers];
+
+  // 1) Pull out pure sequences (runs of 3+ same suit, consecutive ranks)
+  const bySuit = {};
+  naturals.forEach(c => (bySuit[c.suit] = bySuit[c.suit] || []).push(c));
+  Object.values(bySuit).forEach(cards => {
+    cards.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+    let run = [cards[0]];
+    for (let i = 1; i <= cards.length; i++) {
+      const prev = cards[i - 1];
+      const cur = cards[i];
+      if (cur && RANK_ORDER[cur.rank] === RANK_ORDER[prev.rank] + 1) {
+        run.push(cur);
+      } else {
+        if (run.length >= 3) {
+          groups.push(run);
+          run.forEach(c => (naturals = naturals.filter(x => x.id !== c.id)));
+        }
+        run = cur ? [cur] : [];
+      }
+    }
+  });
+
+  // 2) Try to use one joker to extend/complete a near-sequence from what's left, per suit
+  const bySuit2 = {};
+  naturals.forEach(c => (bySuit2[c.suit] = bySuit2[c.suit] || []).push(c));
+  Object.values(bySuit2).forEach(cards => {
+    if (jokerPool.length === 0) return;
+    cards.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+    for (let i = 0; i < cards.length - 1 && jokerPool.length > 0; i++) {
+      const gap = RANK_ORDER[cards[i + 1].rank] - RANK_ORDER[cards[i].rank] - 1;
+      if (gap === 1) {
+        const jk = jokerPool.pop();
+        groups.push([cards[i], jk, cards[i + 1]]);
+        naturals = naturals.filter(x => x.id !== cards[i].id && x.id !== cards[i + 1].id);
+        break;
+      }
+    }
+  });
+
+  // 3) Sets: same rank, different suits
+  const byRank = {};
+  naturals.forEach(c => (byRank[c.rank] = byRank[c.rank] || []).push(c));
+  Object.values(byRank).forEach(cards => {
+    if (cards.length >= 3) {
+      const set = cards.slice(0, Math.min(4, cards.length));
+      groups.push(set);
+      set.forEach(c => (naturals = naturals.filter(x => x.id !== c.id)));
+    }
+  });
+
+  // 4) Leftover naturals + unused jokers = deadwood group, sorted for readability
+  const leftover = sortHandForDisplay([...naturals, ...jokerPool]);
+  if (leftover.length) groups.push(leftover);
+
+  const deadwood = naturals.reduce((s, c) => s + deadwoodValue(c), 0);
+  return { groups, deadwood };
+}
+
 module.exports = {
   buildDoubleDeckWithJokers,
   shuffle,
@@ -183,4 +263,6 @@ module.exports = {
   validateDeclaration,
   scoreLoserHand,
   deadwoodValue,
+  sortHandForDisplay,
+  autoArrangeHand,
 };

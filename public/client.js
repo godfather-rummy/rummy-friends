@@ -2,12 +2,12 @@ const socket = io();
 
 let myId = null;
 let roomCode = null;
-let isHost = false;
 let myHand = [];
-let selectedIds = new Set();
-let groups = []; // array of arrays of card objects, built by user for declare
+let myGroups = []; // array of arrays of card objects — current on-screen arrangement
+let latestRoomState = null;
+let timerInterval = null;
+let dragCardId = null;
 
-const RANK_LABEL = { JOKER: 'JK' };
 function suitSymbol(s) { return { S: '♠', H: '♥', D: '♦', C: '♣' }[s] || ''; }
 function isRed(s) { return s === 'H' || s === 'D'; }
 
@@ -19,6 +19,8 @@ function show(screenId) {
 function cardEl(card, opts = {}) {
   const div = document.createElement('div');
   div.className = 'card' + (opts.small ? ' small' : '');
+  div.draggable = !!opts.draggable;
+  div.dataset.cardId = card.id;
   if (card.isPrintedJoker) {
     div.textContent = 'JOKER';
     div.style.fontSize = '0.7rem';
@@ -37,7 +39,6 @@ document.getElementById('createBtn').onclick = () => {
     if (!res.ok) return (document.getElementById('homeError').textContent = res.error);
     myId = res.playerId;
     roomCode = res.code;
-    isHost = true;
     show('screen-lobby');
   });
 };
@@ -49,12 +50,10 @@ document.getElementById('joinBtn').onclick = () => {
     if (!res.ok) return (document.getElementById('homeError').textContent = res.error);
     myId = res.playerId;
     roomCode = res.code;
-    isHost = false;
     show('screen-lobby');
   });
 };
 
-// auto-join if opened via ?room=CODE
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.get('room')) {
   document.getElementById('codeInput').value = urlParams.get('room').toUpperCase();
@@ -70,8 +69,9 @@ document.getElementById('copyLinkBtn').onclick = () => {
 
 document.getElementById('startBtn').onclick = () => socket.emit('startGame');
 
-// ---------- SOCKET EVENTS ----------
+// ---------- SOCKET: ROOM STATE ----------
 socket.on('roomUpdate', state => {
+  latestRoomState = state;
   roomCode = state.code;
   document.getElementById('lobbyCode').textContent = state.code;
 
@@ -87,21 +87,13 @@ socket.on('roomUpdate', state => {
     document.getElementById('startBtn').style.display = state.hostId === myId ? 'block' : 'none';
   } else if (state.status === 'playing') {
     show('screen-game');
-    renderScoreboard(state);
+    renderTurnIndicator(state);
     renderPiles(state);
+    renderScoresTable(state);
   }
 });
 
-function renderScoreboard(state) {
-  const board = document.getElementById('scoreboard');
-  board.innerHTML = '';
-  state.players.forEach((p, i) => {
-    const chip = document.createElement('span');
-    chip.className = 'score-chip' + (i === state.turnIndex ? ' active-turn' : '');
-    chip.textContent = `${p.name}: ${p.score} pts (${p.cardCount})`;
-    board.appendChild(chip);
-  });
-  const me = state.players.find(p => p.id === myId);
+function renderTurnIndicator(state) {
   const turnPlayer = state.players[state.turnIndex];
   document.getElementById('turnIndicator').textContent =
     turnPlayer.id === myId ? "Your turn" : `${turnPlayer.name}'s turn`;
@@ -122,82 +114,181 @@ function renderPiles(state) {
   }
 }
 
+// ---------- LIVE POINTS TABLE ----------
+document.getElementById('toggleScoresBtn').onclick = () => {
+  document.getElementById('scoresPanel').classList.toggle('open');
+};
+
+let myDeadwood = null;
+
+function renderScoresTable(state) {
+  const body = document.getElementById('scoresTableBody');
+  body.innerHTML = '';
+  const sorted = [...state.players].sort((a, b) => a.score - b.score);
+  const minScore = sorted.length ? sorted[0].score : 0;
+  sorted.forEach(p => {
+    const tr = document.createElement('tr');
+    if (state.players[state.turnIndex] && state.players[state.turnIndex].id === p.id) tr.classList.add('active-turn');
+    if (p.score === minScore) tr.classList.add('leader');
+    const handValueText = p.id === myId && myDeadwood !== null ? myDeadwood : '—';
+    tr.innerHTML = `<td>${p.name}</td><td>${p.score}</td><td>${handValueText}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+// ---------- TURN TIMER ----------
+const CIRCUMFERENCE = 163.36; // 2 * PI * 26
+socket.on('turnTimer', ({ deadline, seconds }) => {
+  clearInterval(timerInterval);
+  const progressEl = document.getElementById('timerProgress');
+  const textEl = document.getElementById('timerText');
+
+  function tick() {
+    const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    textEl.textContent = remaining;
+    const fraction = remaining / seconds;
+    progressEl.style.strokeDashoffset = CIRCUMFERENCE * (1 - fraction);
+    progressEl.classList.toggle('urgent', remaining <= 10);
+    if (remaining <= 0) clearInterval(timerInterval);
+  }
+  tick();
+  timerInterval = setInterval(tick, 1000);
+});
+
+socket.on('turnTimedOut', ({ playerId, playerName }) => {
+  const msg = playerId === myId ? 'You ran out of time — a card was auto-discarded.' : `${playerName} ran out of time.`;
+  flashMessage(msg);
+});
+
+function flashMessage(text) {
+  let el = document.getElementById('flashMsg');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'flashMsg';
+    el.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#1b1b1b;border:1px solid #d4af37;padding:8px 16px;border-radius:8px;z-index:999;font-size:0.9rem;';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => (el.style.opacity = '0'), 3000);
+}
+
+// ---------- PILES ----------
 document.getElementById('stockPile').onclick = () => socket.emit('drawStock');
 document.getElementById('discardPile').onclick = () => socket.emit('drawDiscard');
 
-socket.on('yourHand', ({ hand }) => {
+// ---------- HAND + GROUPING ----------
+socket.on('yourHand', ({ hand, deadwood, groups }) => {
   myHand = hand;
+  myDeadwood = deadwood !== undefined ? deadwood : myDeadwood;
+  document.getElementById('deadwoodLabel').textContent =
+    myDeadwood !== null ? `Hand value: ${myDeadwood} pts if you declared now` : 'Hand value: —';
+
+  if (groups) {
+    myGroups = groups.map(ids => ids.map(id => hand.find(c => c.id === id)).filter(Boolean));
+  } else {
+    const knownIds = new Set(myGroups.flat().map(c => c.id));
+    myGroups = myGroups
+      .map(g => g.filter(c => hand.some(h => h.id === c.id)))
+      .filter(g => g.length > 0);
+    hand.forEach(c => {
+      if (!knownIds.has(c.id)) myGroups.push([c]);
+    });
+  }
   renderHand();
+  if (latestRoomState) renderScoresTable(latestRoomState);
 });
+
+document.getElementById('sortBtn').onclick = () => socket.emit('requestArrange');
 
 function renderHand() {
   const container = document.getElementById('handCards');
   container.innerHTML = '';
-  myHand.forEach(card => {
-    const el = cardEl(card);
-    if (selectedIds.has(card.id)) el.classList.add('selected');
-    el.onclick = () => toggleSelect(card, el);
-    container.appendChild(el);
+  myGroups.forEach((group, gIndex) => {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'card-group' + (group.length > 1 ? ' multi' : '');
+    groupEl.dataset.groupIndex = gIndex;
+
+    group.forEach(card => {
+      const el = cardEl(card, { draggable: true });
+      el.addEventListener('dragstart', () => { dragCardId = card.id; el.classList.add('dragging'); });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+      el.addEventListener('dblclick', () => {
+        socket.emit('discardCard', { cardId: card.id });
+      });
+      groupEl.appendChild(el);
+    });
+
+    groupEl.addEventListener('dragover', e => { e.preventDefault(); groupEl.classList.add('drag-over'); });
+    groupEl.addEventListener('dragleave', () => groupEl.classList.remove('drag-over'));
+    groupEl.addEventListener('drop', e => {
+      e.preventDefault();
+      groupEl.classList.remove('drag-over');
+      moveCardToGroup(dragCardId, gIndex);
+    });
+
+    container.appendChild(groupEl);
   });
+
+  const newZone = document.createElement('div');
+  newZone.className = 'card-group';
+  newZone.style.cssText = 'min-width:40px;min-height:100px;border:1px dashed rgba(255,255,255,0.2);';
+  newZone.addEventListener('dragover', e => e.preventDefault());
+  newZone.addEventListener('drop', e => {
+    e.preventDefault();
+    moveCardToGroup(dragCardId, -1);
+  });
+  container.appendChild(newZone);
 }
 
-function toggleSelect(card, el) {
-  if (selectedIds.has(card.id)) {
-    selectedIds.delete(card.id);
-    el.classList.remove('selected');
+function moveCardToGroup(cardId, targetGroupIndex) {
+  if (!cardId) return;
+  let moving = null;
+  myGroups = myGroups.map(g => {
+    const idx = g.findIndex(c => c.id === cardId);
+    if (idx !== -1) {
+      moving = g[idx];
+      const copy = [...g];
+      copy.splice(idx, 1);
+      return copy;
+    }
+    return g;
+  }).filter(g => g.length > 0);
+
+  if (!moving) return;
+
+  if (targetGroupIndex === -1) {
+    myGroups.push([moving]);
   } else {
-    selectedIds.add(card.id);
-    el.classList.add('selected');
+    myGroups[targetGroupIndex].push(moving);
   }
+  renderHand();
 }
-
-// Right-click / long-press free area = discard selected single card (simplified: click a card then this button)
-document.getElementById('handCards').addEventListener('dblclick', e => {
-  const idx = [...document.getElementById('handCards').children].indexOf(e.target.closest('.card'));
-  if (idx === -1) return;
-  socket.emit('discardCard', { cardId: myHand[idx].id });
-  selectedIds.clear();
-});
 
 // ---------- DECLARE ----------
-// Simplified flow: player selects cards into groups sequentially.
-// Selecting cards + clicking Declare treats each contiguous "selection batch" separately
-// via prompt-based grouping to keep v1 simple and functional.
 document.getElementById('declareBtn').onclick = () => {
   if (myHand.length !== 13) {
     alert('You can only declare with exactly 13 cards in hand (discard first if you drew).');
     return;
   }
-  const groupInput = prompt(
-    'Enter your groups as card IDs separated by | for each group, groups separated by ;\n' +
-    'Simplify: just type "auto" to submit your whole hand as one group for now (basic test mode).'
-  );
-  if (!groupInput) return;
-
-  let submittedGroups;
-  if (groupInput.trim().toLowerCase() === 'auto') {
-    submittedGroups = [myHand];
-  } else {
-    submittedGroups = groupInput.split(';').map(g =>
-      g.split('|').map(id => myHand.find(c => c.id === id.trim())).filter(Boolean)
-    );
-  }
-  socket.emit('declare', { groups: submittedGroups });
+  if (!confirm('Declare now with your current card groupings?')) return;
+  socket.emit('declare', { groups: myGroups });
 };
 
 socket.on('roundResult', result => {
+  clearInterval(timerInterval);
   show('screen-result');
   document.getElementById('resultTitle').textContent = result.winnerId
     ? `${result.winnerName} wins the round!`
     : `Invalid declare — ${result.reason}`;
   const list = document.getElementById('resultScores');
   list.innerHTML = '';
-  result.scores.forEach(p => {
+  [...result.scores].sort((a, b) => a.score - b.score).forEach(p => {
     const li = document.createElement('li');
     li.textContent = `${p.name}: ${p.score} pts`;
     list.appendChild(li);
   });
-  selectedIds.clear();
 });
 
 document.getElementById('nextRoundBtn').onclick = () => socket.emit('nextRound');

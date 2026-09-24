@@ -5,7 +5,9 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
-const { dealRound, validateDeclaration, scoreLoserHand, isWildJoker } = require('./rummyEngine');
+const { dealRound, validateDeclaration, scoreLoserHand, isWildJoker, autoArrangeHand } = require('./rummyEngine');
+
+const TURN_SECONDS = 60;
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +45,7 @@ function publicRoomState(room) {
     stockCount: room.stock ? room.stock.length : 0,
     wildJokerRank: room.wildJokerRank,
     hostId: room.hostId,
+    turnDeadline: room.turnDeadline || null,
   };
 }
 
@@ -53,9 +56,64 @@ function broadcastRoom(room) {
 function sendPrivateHands(room) {
   room.players.forEach(p => {
     if (p.socketId) {
-      io.to(p.socketId).emit('yourHand', { hand: p.hand });
+      const arranged = autoArrangeHand(p.hand, room.wildJokerRank);
+      io.to(p.socketId).emit('yourHand', { hand: p.hand, deadwood: arranged.deadwood });
     }
   });
+}
+
+function sendHandTo(room, player) {
+  if (!player.socketId) return;
+  const arranged = autoArrangeHand(player.hand, room.wildJokerRank);
+  io.to(player.socketId).emit('yourHand', { hand: player.hand, deadwood: arranged.deadwood });
+}
+
+// ---- Turn timer: 60s per player. On timeout the player forfeits the turn —
+// server auto-draws from stock (if they hadn't drawn) and auto-discards
+// their single highest-value deadwood card, then play passes on. ----
+function clearTurnTimer(room) {
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = null;
+  }
+}
+
+function startTurnTimer(room) {
+  clearTurnTimer(room);
+  room.turnDeadline = Date.now() + TURN_SECONDS * 1000;
+  io.to(room.code).emit('turnTimer', { deadline: room.turnDeadline, seconds: TURN_SECONDS });
+  room.turnTimer = setTimeout(() => handleTurnTimeout(room), TURN_SECONDS * 1000);
+}
+
+function handleTurnTimeout(room) {
+  if (room.status !== 'playing') return;
+  const player = room.players[room.turnIndex];
+  if (!player) return;
+
+  // Draw from stock if hand is below 14 (i.e. they hadn't drawn yet this turn)
+  if (player.hand.length < 14 && room.stock.length > 0) {
+    player.hand.push(room.stock.pop());
+  }
+
+  // Auto-discard the single card that hurts least to keep: pick from the
+  // "deadwood" bucket of the auto-arrange, highest value first.
+  const arranged = autoArrangeHand(player.hand, room.wildJokerRank);
+  const deadwoodGroup = arranged.groups[arranged.groups.length - 1] || player.hand;
+  const worst = [...deadwoodGroup].filter(c => !c.isPrintedJoker)
+    .sort((a, b) => require('./rummyEngine').deadwoodValue(b) - require('./rummyEngine').deadwoodValue(a))[0]
+    || player.hand[player.hand.length - 1];
+
+  const idx = player.hand.findIndex(c => c.id === worst.id);
+  if (idx !== -1) {
+    const [card] = player.hand.splice(idx, 1);
+    room.discard.push(card);
+  }
+
+  room.turnIndex = (room.turnIndex + 1) % room.players.length;
+  io.to(room.code).emit('turnTimedOut', { playerId: player.id, playerName: player.name });
+  sendHandTo(room, player);
+  broadcastRoom(room);
+  startTurnTimer(room);
 }
 
 io.on('connection', socket => {
@@ -111,6 +169,7 @@ io.on('connection', socket => {
 
     broadcastRoom(room);
     sendPrivateHands(room);
+    startTurnTimer(room);
   });
 
   socket.on('drawStock', () => {
@@ -146,8 +205,23 @@ io.on('connection', socket => {
     const [card] = player.hand.splice(idx, 1);
     room.discard.push(card);
     room.turnIndex = (room.turnIndex + 1) % room.players.length;
-    io.to(player.socketId).emit('yourHand', { hand: player.hand });
+    sendHandTo(room, player);
     broadcastRoom(room);
+    startTurnTimer(room);
+  });
+
+  // Client asks server to auto-arrange the player's own hand into
+  // best-guess sequences/sets — used by the "Sort" button and to show
+  // live deadwood points as the hand changes.
+  socket.on('requestArrange', () => {
+    const room = rooms[currentRoomCode];
+    if (!room || room.status !== 'playing') return;
+    const player = room.players.find(p => p.id === playerId);
+    if (!player) return;
+    const arranged = autoArrangeHand(player.hand, room.wildJokerRank);
+    const orderedHand = [].concat(...arranged.groups);
+    player.hand = orderedHand;
+    io.to(player.socketId).emit('yourHand', { hand: player.hand, deadwood: arranged.deadwood, groups: arranged.groups.map(g => g.map(c => c.id)) });
   });
 
   socket.on('declare', ({ groups }) => {
@@ -157,6 +231,7 @@ io.on('connection', socket => {
     if (player.id !== playerId) return;
 
     const result = validateDeclaration(groups, room.wildJokerRank);
+    clearTurnTimer(room);
 
     if (!result.valid) {
       player.score += 80; // wrong declare penalty
@@ -200,7 +275,10 @@ io.on('connection', socket => {
     // Clean up empty rooms after a delay
     setTimeout(() => {
       const r = rooms[currentRoomCode];
-      if (r && r.players.every(p => !p.connected)) delete rooms[currentRoomCode];
+      if (r && r.players.every(p => !p.connected)) {
+        clearTurnTimer(r);
+        delete rooms[currentRoomCode];
+      }
     }, 5 * 60 * 1000);
   });
 });

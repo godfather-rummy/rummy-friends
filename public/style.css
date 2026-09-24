@@ -47,11 +47,35 @@ body {
 }
 .hint { opacity: 0.7; font-size: 0.9rem; }
 
-.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-#scoreboard { display: flex; gap: 12px; flex-wrap: wrap; }
-.score-chip { background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 20px; font-size: 0.85rem; }
-.score-chip.active-turn { background: #d4af37; color: #1b1b1b; font-weight: 700; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; }
 #turnIndicator { font-weight: 600; }
+
+.timer-wrap { position: relative; width: 60px; height: 60px; flex-shrink: 0; }
+.timer-ring { width: 60px; height: 60px; transform: rotate(-90deg); }
+.timer-track { fill: none; stroke: rgba(255,255,255,0.15); stroke-width: 5; }
+.timer-progress {
+  fill: none; stroke: #d4af37; stroke-width: 5; stroke-linecap: round;
+  stroke-dasharray: 163.36; stroke-dashoffset: 0;
+  transition: stroke-dashoffset 1s linear, stroke 0.3s ease;
+}
+.timer-progress.urgent { stroke: #e0413e; }
+#timerText {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-weight: 700; font-size: 0.95rem;
+}
+
+.scores-panel {
+  display: none;
+  background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px; padding: 14px; margin-bottom: 14px;
+}
+.scores-panel.open { display: block; }
+.scores-panel h3 { margin: 0 0 10px; font-size: 1rem; }
+#scoresTable { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+#scoresTable th { text-align: left; opacity: 0.7; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.15); }
+#scoresTable td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+#scoresTable tr.active-turn td { color: #d4af37; font-weight: 700; }
+#scoresTable tr.leader td:first-child::before { content: "👑 "; }
 
 .table {
   background: #0e3f2f;
@@ -84,11 +108,22 @@ body {
 .card.selected { transform: translateY(-14px); box-shadow: 0 8px 14px rgba(212,175,55,0.6); }
 
 .hand-area { margin-top: 24px; }
+.hand-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.deadwood-label { font-size: 0.9rem; opacity: 0.85; }
 .hand-cards {
-  display: flex; gap: 6px; flex-wrap: wrap;
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start;
   background: rgba(0,0,0,0.2); padding: 16px; border-radius: 12px;
   min-height: 110px;
 }
+.card-group {
+  display: flex; gap: 2px; padding: 4px; border-radius: 10px;
+  border: 1px dashed transparent;
+}
+.card-group.multi { border-color: rgba(212,175,55,0.5); background: rgba(212,175,55,0.08); }
+.card-group.drag-over { border-color: #d4af37; background: rgba(212,175,55,0.2); }
+.card { margin-right: -8px; }
+.card-group .card:last-child { margin-right: 0; }
+.card.dragging { opacity: 0.4; }
 .hand-actions { margin-top: 12px; display: flex; gap: 10px; justify-content: flex-end; }
 .hand-actions .btn { width: auto; padding: 10px 20px; }
 
