@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rummy Friends</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="screen-home" class="screen active">
+  <div class="brand">
+    <h1>🃏 Rummy Friends</h1>
+    <p class="tagline">Play 13-card rummy with friends — no signup, just a name.</p>
+  </div>
+  <div class="card-panel">
+    <input id="nameInput" placeholder="Your name" maxlength="16">
+    <button id="createBtn" class="btn primary">Create Room</button>
+    <div class="divider">or</div>
+    <input id="codeInput" placeholder="Enter room code" maxlength="6" style="text-transform:uppercase">
+    <button id="joinBtn" class="btn secondary">Join Room</button>
+    <p id="homeError" class="error"></p>
+  </div>
+</div>
+
+<div id="screen-lobby" class="screen">
+  <h2>Room Code: <span id="lobbyCode"></span> <button id="copyLinkBtn" class="btn tiny">Copy Invite Link</button></h2>
+  <ul id="lobbyPlayers" class="player-list"></ul>
+  <button id="startBtn" class="btn primary">Start Game</button>
+  <p class="hint">Share the room code or link — need at least 2 players.</p>
+</div>
+
+<div id="screen-game" class="screen">
+  <div class="topbar">
+    <div id="scoreboard"></div>
+    <div id="turnIndicator"></div>
+  </div>
+
+  <div class="table">
+    <div class="piles">
+      <div class="pile-group">
+        <div id="stockPile" class="card back"></div>
+        <span>Stock</span>
+      </div>
+      <div class="pile-group">
+        <div id="discardPile" class="card"></div>
+        <span>Discard</span>
+      </div>
+      <div class="pile-group">
+        <div id="wildJokerCard" class="card small"></div>
+        <span>Wild Joker</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="hand-area">
+    <div id="handCards" class="hand-cards"></div>
+    <div class="hand-actions">
+      <button id="declareBtn" class="btn danger">Declare</button>
+    </div>
+  </div>
+</div>
+
+<div id="screen-result" class="screen">
+  <h2 id="resultTitle"></h2>
+  <ul id="resultScores" class="player-list"></ul>
+  <button id="nextRoundBtn" class="btn primary">Back to Lobby</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
